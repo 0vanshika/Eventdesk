@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EventDesk | Event Details</title>
+  <link rel="icon" type="image/svg+xml" href="assets/images/favicon.svg">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
@@ -37,21 +38,26 @@
       <div class="row g-5">
         <div class="col-lg-7">
           <img id="detailPoster" src="assets/images/hero.png" alt="Event poster" class="detail-poster mb-4">
-          <span id="detailCategory" class="badge badge-category mb-3">Category</span>
+          <div class="d-flex gap-2 flex-wrap align-items-center mb-3">
+            <span id="detailCategory" class="badge badge-category">Category</span>
+            <span id="detailSourceTypeBadge" class="badge badge-soft d-none">External Opportunity</span>
+            <span id="detailSourcePlatformPill" class="badge badge-soft d-none">Unstop</span>
+          </div>
           <h1 id="detailTitle" class="detail-title">Loading event…</h1>
           <p id="detailDescription" class="detail-description mt-3">Event details will appear here once the event data is loaded.</p>
+          <p id="detailContextNote" class="detail-context-note d-none"></p>
           <div class="organizer-row mt-4">
             <div id="organizerAvatar" class="avatar-circle">ED</div>
             <div>
-              <p class="mb-1 text-muted small">Organized by</p>
+              <p id="organizerLabel" class="mb-1 text-muted small">Organized by</p>
               <strong id="organizerName">EventDesk Team</strong>
             </div>
           </div>
           <div class="detail-meta-grid mt-4">
-            <div class="detail-meta-item"><span>📅</span> <strong>Date</strong><p id="detailDate">March 28 2026</p></div>
-            <div class="detail-meta-item"><span>⏰</span> <strong>Time</strong><p id="detailTime">3:00 PM</p></div>
-            <div class="detail-meta-item"><span>📍</span> <strong>Venue</strong><p id="detailVenue">Seminar Hall B</p></div>
-            <div class="detail-meta-item"><span>🏷️</span> <strong>Type</strong><p id="detailCategoryText">Workshop</p></div>
+            <div class="detail-meta-item"><span>📅</span> <strong id="detailDateLabel">Date</strong><p id="detailDate">March 28 2026</p></div>
+            <div class="detail-meta-item"><span>⏰</span> <strong id="detailTimeLabel">Time</strong><p id="detailTime">3:00 PM</p></div>
+            <div class="detail-meta-item"><span>📍</span> <strong id="detailVenueLabel">Venue</strong><p id="detailVenue">Seminar Hall B</p></div>
+            <div class="detail-meta-item"><span>🏷️</span> <strong id="detailTypeLabel">Type</strong><p id="detailCategoryText">Workshop</p></div>
           </div>
 
           <div id="detailDynamicMeta" class="d-flex flex-wrap gap-2 mt-4 d-none">
@@ -77,6 +83,13 @@
             </div>
           </div>
 
+          <div id="detailLongDescriptionSection" class="mt-5 pt-3 border-top d-none">
+            <div class="event-section">
+              <h3 id="detailLongDescriptionHeading" class="mb-3">About this opportunity</h3>
+              <div id="detailLongDescription" class="text-muted" style="white-space: pre-wrap; font-size: 0.95rem;"></div>
+            </div>
+          </div>
+
           <div id="detailExtendedSections" class="mt-5 pt-3 border-top d-none">
             <div class="event-section mb-5 d-none" id="sectionTimelineWrapper">
               <h3 class="mb-3">Stages &amp; Timeline</h3>
@@ -96,22 +109,40 @@
         <div class="col-lg-5">
           <aside class="card sticky-sidebar">
             <div class="card-body p-4">
-              <div class="d-flex justify-content-between align-items-end mb-3">
-                <div>
-                  <p class="detail-seat-count mb-1"><span id="registeredCount">0</span> / <span id="seatCap">0</span> Registrations</p>
-                  <span id="spotsBadge" class="badge badge-warning-soft">0 slots left</span>
+              <div id="detailCampusStatsWrap">
+                <div class="d-flex justify-content-between align-items-end mb-3">
+                  <div>
+                    <p class="detail-seat-count mb-1"><span id="registeredCount">0</span> / <span id="seatCap">0</span> Registrations</p>
+                    <span id="spotsBadge" class="badge badge-warning-soft">0 slots left</span>
+                  </div>
+                </div>
+                <div class="seat-progress large mb-2">
+                  <div id="detailProgressFill" class="seat-progress-fill"></div>
+                </div>
+                <p id="detailProgressCopy" class="text-muted small mb-4">Live registration data updates here.</p>
+              </div>
+
+              <div id="detailExternalStatsWrap" class="d-none">
+                <div class="external-sidebar-platform mb-3">
+                  <span id="detailExternalTypeBadge" class="badge badge-soft">External Opportunity</span>
+                  <span id="detailSourceBadge" class="badge badge-category">Unstop</span>
+                </div>
+                <p id="detailExternalMetaCopy" class="external-sidebar-copy">Applications happen on the source platform. EventDesk is surfacing this as a discovered opportunity.</p>
+                <div class="detail-fact-card external-source-card mb-4">
+                  <span>Original Source</span>
+                  <strong id="detailSourcePlatform">Unstop</strong>
+                  <a id="detailSourceInlineLink" href="#" target="_blank" rel="noopener noreferrer" class="source-link-inline d-none">Open original listing ↗</a>
                 </div>
               </div>
-              <div class="seat-progress large mb-2">
-                <div id="detailProgressFill" class="seat-progress-fill"></div>
-              </div>
-              <p id="detailProgressCopy" class="text-muted small mb-4">Live registration data updates here.</p>
 
-              <div id="detailCountdown" class="countdown-panel mb-4">
-                <div><span id="countdownDays">00</span><small>D</small></div>
-                <div><span id="countdownHours">00</span><small>H</small></div>
-                <div><span id="countdownMinutes">00</span><small>M</small></div>
-                <div><span id="countdownSeconds">00</span><small>S</small></div>
+              <div id="detailCountdownWrap" class="mb-4">
+                <p id="detailCountdownLabel" class="detail-countdown-label">Event starts in</p>
+                <div id="detailCountdown" class="countdown-panel">
+                  <div><span id="countdownDays">00</span><small>D</small></div>
+                  <div><span id="countdownHours">00</span><small>H</small></div>
+                  <div><span id="countdownMinutes">00</span><small>M</small></div>
+                  <div><span id="countdownSeconds">00</span><small>S</small></div>
+                </div>
               </div>
 
               <div id="registrationActionWrap">
@@ -120,6 +151,10 @@
               <div id="fullStateWrap" class="d-none text-center">
                 <p class="full-copy">This event is full 😔</p>
                 <button id="waitlistButton" class="btn btn-outline-warning w-100 btn-lg">Join Waitlist ⏳</button>
+              </div>
+              <div id="externalActionWrap" class="d-none">
+                <a id="externalPrimaryButton" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-primary w-100 btn-lg">View on Source</a>
+                <p id="externalActionNote" class="external-action-note mb-0">Registration or application happens on the source platform.</p>
               </div>
             </div>
           </aside>

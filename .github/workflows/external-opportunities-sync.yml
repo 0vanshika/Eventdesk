@@ -1,0 +1,49 @@
+name: External Opportunities Sync
+
+on:
+  schedule:
+    - cron: '30 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-opportunities-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-unstop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/external-import/package-lock.json
+
+      - name: Install importer dependencies
+        working-directory: scripts/external-import
+        run: npm ci
+
+      - name: Validate Firebase secret
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$FIREBASE_SERVICE_ACCOUNT_JSON" ]; then
+            echo "FIREBASE_SERVICE_ACCOUNT_JSON is missing."
+            exit 1
+          fi
+
+      - name: Sync Unstop opportunities into Firestore
+        working-directory: scripts/external-import
+        env:
+          FIREBASE_PROJECT_ID: krishna-e9c59
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+        run: node src/index.js --source=unstop --max-urls=50 --verbose

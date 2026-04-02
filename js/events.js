@@ -34,6 +34,24 @@ import {
   validateEmail,
   validatePhone
 } from './utils.js';
+import {
+  getExternalEventById,
+  subscribeToExternalEvents,
+  subscribeToExternalSyncStatus
+} from './external-events.js';
+import {
+  filterOpportunityFeed,
+  getOpportunityCountdownContext,
+  getOpportunityDateValue as getOpportunityPrimaryDateValue,
+  getOpportunityDeadlineValue,
+  getOpportunityLocationValue,
+  getOpportunityModeValue,
+  getOpportunityParticipationValue,
+  getOpportunitySourceLabel,
+  getOpportunitySourceTypeLabel,
+  getOpportunityTrackValue,
+  sortOpportunityFeed
+} from './opportunity-utils.js';
 
 let eventsCountdownTimer = null;
 let detailCountdownTimer = null;
@@ -184,6 +202,8 @@ function normalizeEvent(item) {
     id: item.id || item.eventId,
     eventId: item.id || item.eventId,
     ...item,
+    sourceType: 'campus',
+    sourceLabel: 'Campus',
     category: item.category || 'Other',
     format: getNormalizedFormat(item),
     location: getNormalizedLocation(item),
@@ -191,6 +211,61 @@ function normalizeEvent(item) {
     tracks: splitCommaValues(item.tracks),
     eligibility: splitCommaValues(item.eligibility)
   };
+}
+
+function isExternalOpportunity(event) {
+  return event?.sourceType === 'external';
+}
+
+function getOpportunityDetailUrl(event) {
+  return isExternalOpportunity(event)
+    ? `event-detail.html?id=${event.id}&type=external`
+    : `event-detail.html?id=${event.id}`;
+}
+
+function toggleElementVisibility(element, shouldShow) {
+  if (!element) return;
+  element.classList.toggle('d-none', !shouldShow);
+}
+
+function setOpportunityChip(element, label, value) {
+  if (!element) return;
+  if (!value) {
+    element.classList.add('d-none');
+    return;
+  }
+
+  element.innerHTML = `<strong>${label}</strong> ${value}`;
+  element.classList.remove('d-none');
+}
+
+function buildExternalSignalText(event) {
+  if (event.registrationDeadline) {
+    return `Applications close: ${formatDate(event.registrationDeadline)}`;
+  }
+
+  if (event.startDate) {
+    return `Starts: ${formatDate(event.startDate)}`;
+  }
+
+  if (event.updatedAt || event.importedAt) {
+    return `Recently synced from ${getOpportunitySourceLabel(event.source)}`;
+  }
+
+  return `Open the original ${getOpportunitySourceLabel(event.source)} listing`;
+}
+
+function buildExternalSecondarySignal(event) {
+  const sourceLabel = getOpportunitySourceLabel(event.source);
+  if (event.status && event.status !== 'Unknown') {
+    return `${event.status} on ${sourceLabel}`;
+  }
+
+  if (event.mode) {
+    return `${event.mode} • ${sourceLabel}`;
+  }
+
+  return `Applications happen on ${sourceLabel}`;
 }
 
 function validatePosterFile(file) {
@@ -312,23 +387,38 @@ function subscribeToEvents(callback, onError) {
 }
 
 function buildMetaLine(event) {
+  if (isExternalOpportunity(event)) {
+    const primaryDate = getOpportunityPrimaryDateValue(event);
+    const parts = [
+      primaryDate ? formatShortDate(primaryDate) : '',
+      event.organizerName || getOpportunitySourceLabel(event.source),
+      getOpportunityModeValue(event)
+    ].filter(Boolean);
+
+    return parts.join('  •  ');
+  }
+
   return `${formatShortDate(event.date)}  •  ${event.venue}  •  ${getNormalizedFormat(event)}`;
 }
 
-function renderCountdownChip(element, dateValue) {
+function renderCountdownChip(element, dateValue, label = 'Starts') {
+  if (!element || !dateValue) {
+    return;
+  }
+
   const countdown = getCountdown(dateValue);
   if (countdown.isUrgent) {
     element.classList.add('urgent');
-    element.textContent = `🔴 Starts in ${countdown.hours} hrs ${countdown.minutes} mins`;
+    element.textContent = `🔴 ${label} in ${countdown.hours} hrs ${countdown.minutes} mins`;
     return;
   }
   element.classList.remove('urgent');
-  element.textContent = `Starts in ${countdown.days}d ${countdown.hours}h ${countdown.minutes}m`;
+  element.textContent = `${label} in ${countdown.days}d ${countdown.hours}h ${countdown.minutes}m`;
 }
 
 function syncEventsCountdowns() {
   document.querySelectorAll('.countdown-chip[data-event-date]').forEach((chip) => {
-    renderCountdownChip(chip, chip.dataset.eventDate);
+    renderCountdownChip(chip, chip.dataset.eventDate, chip.dataset.countdownLabel || 'Starts');
   });
 }
 
@@ -364,7 +454,10 @@ function renderEventCards(events) {
     const poster = fragment.querySelector('.event-poster');
     const title = fragment.querySelector('.event-title');
     const meta = fragment.querySelector('.event-meta');
+    const typeBadge = fragment.querySelector('.opportunity-type-badge');
+    const sourceBadge = fragment.querySelector('.source-platform-badge');
     const progressFill = fragment.querySelector('.seat-progress-fill');
+    const progressBar = fragment.querySelector('.seat-progress');
     const progressCopy = fragment.querySelector('.seat-progress-copy');
     const seatBadge = fragment.querySelector('.seat-badge');
     const categoryBadge = fragment.querySelector('.badge-category');
@@ -375,37 +468,83 @@ function renderEventCards(events) {
     const trackChip = fragment.querySelector('.event-track-chip');
     const deadlineCopy = fragment.querySelector('.event-deadline-copy');
     const detailsButton = fragment.querySelector('.view-details-btn');
+    const sourceLink = fragment.querySelector('.event-source-link');
     const countdownChip = fragment.querySelector('.countdown-chip');
     const seatInfo = fragment.querySelector('.info-seats');
+    const isExternal = isExternalOpportunity(event);
+    const opportunityMode = isExternal ? (getOpportunityModeValue(event) || 'See source') : getNormalizedFormat(event);
+    const opportunityLocation = isExternal ? getOpportunityLocationValue(event) : getNormalizedLocation(event);
+    const participationValue = isExternal ? getOpportunityParticipationValue(event) : getParticipationLabel(event);
+    const trackHighlight = isExternal ? getOpportunityTrackValue(event) : getTrackHighlight(event);
+    const primaryDate = isExternal ? getOpportunityPrimaryDateValue(event) : getEventDateValue(event);
+    const deadlineDate = isExternal ? getOpportunityDeadlineValue(event) : (event.regDeadline ? getEventDateValue({ date: event.regDeadline }) : null);
+    const countdownContext = isExternal ? getOpportunityCountdownContext(event) : { kind: 'start', label: 'Starts' };
     const seatStatus = updateSeatUI(event.registeredCount, event.seatCap);
 
     card.style.animationDelay = `${index * 80}ms`;
+    card.classList.toggle('is-external', isExternal);
     poster.src = event.posterUrl || 'assets/images/hero.png';
     title.textContent = event.title;
     meta.textContent = buildMetaLine(event);
-    summary.textContent = event.description;
-    progressFill.style.width = `${seatStatus.usedPercent}%`;
-    progressFill.className = `seat-progress-fill ${seatStatus.colorClass === 'amber' ? 'amber' : seatStatus.colorClass === 'red' ? 'red' : ''}`.trim();
-    progressCopy.textContent = `${event.registeredCount} / ${event.seatCap} registrations`;
-    seatBadge.textContent = seatStatus.label;
-    seatBadge.className = `seat-badge ${seatStatus.colorClass === 'amber' ? 'amber' : seatStatus.colorClass === 'red' ? 'red' : ''}`.trim();
+    summary.textContent = isExternal
+      ? (event.summary || event.description || 'Open the source page for complete eligibility and application details.')
+      : event.description;
+    typeBadge.textContent = getOpportunitySourceTypeLabel(event);
+    toggleElementVisibility(typeBadge, true);
+    sourceBadge.textContent = getOpportunitySourceLabel(event.source);
+    toggleElementVisibility(sourceBadge, isExternal);
     categoryBadge.textContent = event.category;
-    formatBadge.textContent = getNormalizedFormat(event);
-    locationChip.innerHTML = `<strong>Location</strong> ${getNormalizedLocation(event)}`;
-    teamChip.innerHTML = `<strong>Participation</strong> ${getParticipationLabel(event)}`;
-    const trackHighlight = getTrackHighlight(event);
+    formatBadge.textContent = opportunityMode;
+    setOpportunityChip(locationChip, 'Location', opportunityLocation);
+    setOpportunityChip(teamChip, isExternal ? 'Team' : 'Participation', participationValue);
+
     if (trackHighlight) {
-      trackChip.innerHTML = `<strong>Track</strong> ${trackHighlight}`;
-      trackChip.classList.remove('d-none');
+      setOpportunityChip(trackChip, isExternal && event.prizesText ? 'Prize' : 'Track', trackHighlight);
     } else {
-      trackChip.classList.add('d-none');
+      toggleElementVisibility(trackChip, false);
     }
-    const deadlineValue = event.regDeadline ? formatDate(event.regDeadline) : `Closes on ${formatShortDate(event.date)}`;
-    deadlineCopy.textContent = event.regDeadline ? `Registration deadline: ${deadlineValue}` : `Opens until the event begins`;
-    seatInfo.textContent = `${event.registeredCount} / ${event.seatCap} registrations`;
-    detailsButton.href = `event-detail.html?id=${event.id}`;
-    countdownChip.dataset.eventDate = getEventDateValue(event).toISOString();
-    renderCountdownChip(countdownChip, countdownChip.dataset.eventDate);
+
+    if (isExternal) {
+      toggleElementVisibility(seatBadge, false);
+      toggleElementVisibility(progressBar, false);
+      toggleElementVisibility(progressCopy, false);
+      deadlineCopy.textContent = buildExternalSignalText(event);
+      seatInfo.textContent = buildExternalSecondarySignal(event);
+      detailsButton.textContent = 'View Details';
+      sourceLink.href = event.sourceUrl || '#';
+      sourceLink.textContent = `View on ${getOpportunitySourceLabel(event.source)} ↗`;
+      toggleElementVisibility(sourceLink, Boolean(event.sourceUrl));
+    } else {
+      progressFill.style.width = `${seatStatus.usedPercent}%`;
+      progressFill.className = `seat-progress-fill ${seatStatus.colorClass === 'amber' ? 'amber' : seatStatus.colorClass === 'red' ? 'red' : ''}`.trim();
+      progressCopy.textContent = `${event.registeredCount} / ${event.seatCap} registrations`;
+      seatBadge.textContent = seatStatus.label;
+      seatBadge.className = `seat-badge ${seatStatus.colorClass === 'amber' ? 'amber' : seatStatus.colorClass === 'red' ? 'red' : ''}`.trim();
+      toggleElementVisibility(seatBadge, true);
+      toggleElementVisibility(progressBar, true);
+      toggleElementVisibility(progressCopy, true);
+      deadlineCopy.textContent = deadlineDate
+        ? `Registration deadline: ${formatDate(deadlineDate)}`
+        : `Opens until the event begins`;
+      seatInfo.textContent = `${event.registeredCount} / ${event.seatCap} registrations`;
+      detailsButton.textContent = 'View Details';
+      toggleElementVisibility(sourceLink, false);
+    }
+
+    detailsButton.href = getOpportunityDetailUrl(event);
+
+    if (primaryDate && countdownContext.kind !== 'synced') {
+      countdownChip.dataset.eventDate = primaryDate.toISOString();
+      countdownChip.dataset.countdownLabel = countdownContext.label;
+      toggleElementVisibility(countdownChip, true);
+      renderCountdownChip(countdownChip, countdownChip.dataset.eventDate, countdownChip.dataset.countdownLabel);
+    } else {
+      countdownChip.textContent = '';
+      delete countdownChip.dataset.eventDate;
+      delete countdownChip.dataset.countdownLabel;
+      toggleElementVisibility(countdownChip, false);
+    }
+
     grid.appendChild(fragment);
   });
 
@@ -413,21 +552,7 @@ function renderEventCards(events) {
 }
 
 function applySort(events, sortValue) {
-  const items = [...events];
-  if (sortValue === 'spots') {
-    return items.sort((left, right) => (left.seatCap - left.registeredCount) - (right.seatCap - right.registeredCount));
-  }
-  if (sortValue === 'popular') {
-    return items.sort((left, right) => right.registeredCount - left.registeredCount);
-  }
-  if (sortValue === 'deadline') {
-    return items.sort((left, right) => {
-      const leftValue = left.regDeadline ? getEventDateValue({ date: left.regDeadline }).getTime() : getEventDateValue(left).getTime();
-      const rightValue = right.regDeadline ? getEventDateValue({ date: right.regDeadline }).getTime() : getEventDateValue(right).getTime();
-      return leftValue - rightValue;
-    });
-  }
-  return items.sort((left, right) => getEventDateValue(left) - getEventDateValue(right));
+  return sortOpportunityFeed(events, sortValue);
 }
 
 export async function createEvent(eventData) {
@@ -475,13 +600,13 @@ export async function getEvents(filters = {}) {
     return filterEvents(allEvents, filters);
   } catch (error) {
     console.warn('Using fallback events:', error);
-    return filterEvents(fallbackEvents, filters);
+    return filterEvents(fallbackEvents.map((item) => normalizeEvent(item)), filters);
   }
 }
 
-export async function getEventById(eventId) {
+async function getCampusEventById(eventId, { fallback = true } = {}) {
   if (!eventId) {
-    return fallbackEvents[0];
+    return fallback ? normalizeEvent(fallbackEvents[0]) : null;
   }
 
   try {
@@ -493,7 +618,16 @@ export async function getEventById(eventId) {
     console.warn('Fallback event detail:', error);
   }
 
-  return fallbackEvents.find((item) => item.id === eventId) || fallbackEvents[0];
+  if (!fallback) {
+    return null;
+  }
+
+  const fallbackEvent = fallbackEvents.find((item) => item.id === eventId) || fallbackEvents[0];
+  return normalizeEvent(fallbackEvent);
+}
+
+export async function getEventById(eventId) {
+  return getCampusEventById(eventId);
 }
 
 export async function updateEventStatus(eventId, status) {
@@ -522,19 +656,38 @@ export async function initEventsPage() {
   const locationSelect = document.getElementById('eventLocationFilter');
   const formatSelect = document.getElementById('eventFormatFilter');
   const teamSelect = document.getElementById('eventTeamFilter');
+  const sourceButtons = document.querySelectorAll('#sourcePills .btn-pill');
   const categoryContainer = document.getElementById('categoryPills');
   const initialQuery = getQueryParam('q') || '';
+  let campusEvents = [];
+  let externalEvents = [];
   let allEvents = [];
   let currentCategory = 'All';
+  let currentSource = 'All';
+  let externalSyncStatus = null;
+  let campusReady = false;
+  let externalReady = false;
+  const emptyStateTitle = document.getElementById('eventsEmptyStateTitle');
+  const emptyStateCopy = document.getElementById('eventsEmptyStateCopy');
 
-  showLoadingSpinner('eventsLoader', 'Finding events near you…');
+  showLoadingSpinner('eventsLoader', 'Loading campus events and external opportunities…');
   if (searchInput) {
     searchInput.value = initialQuery;
   }
 
+  const getSourceScopedEvents = () => (
+    currentSource === 'All'
+      ? allEvents
+      : allEvents.filter((event) => (isExternalOpportunity(event) ? 'external' : 'campus') === currentSource)
+  );
+
   const renderCategoryPills = () => {
     if (!categoryContainer) return;
-    const categories = ['All', ...new Set(allEvents.map((event) => event.category).filter(Boolean))];
+    const categories = ['All', ...new Set(getSourceScopedEvents().map((event) => event.category).filter(Boolean))];
+    if (!categories.includes(currentCategory)) {
+      currentCategory = 'All';
+    }
+
     categoryContainer.innerHTML = categories.map((category) => `
       <button class="btn btn-pill ${category === currentCategory ? 'active' : ''}" data-category="${category}">
         ${category === 'All' ? 'All Opportunities' : category}
@@ -553,15 +706,57 @@ export async function initEventsPage() {
   const populateLocations = () => {
     if (!locationSelect) return;
     const currentValue = locationSelect.value || 'All';
-    const locations = ['All', ...new Set(allEvents.map((event) => getNormalizedLocation(event)).filter(Boolean))];
+    const locations = ['All', ...new Set(getSourceScopedEvents().map((event) => getOpportunityLocationValue(event)).filter(Boolean))];
     locationSelect.innerHTML = locations.map((location) => `
       <option value="${location}">${location === 'All' ? 'All locations' : location}</option>
     `).join('');
     locationSelect.value = locations.includes(currentValue) ? currentValue : 'All';
   };
 
+  const updateResultsHead = (visibleEvents) => {
+    const resultMeta = document.getElementById('eventsResultMeta');
+    const livePulse = document.getElementById('eventsLivePulse');
+    const campusCount = visibleEvents.filter((event) => !isExternalOpportunity(event)).length;
+    const externalCount = visibleEvents.filter((event) => isExternalOpportunity(event)).length;
+    const metaBits = [`${visibleEvents.length} live opportunity${visibleEvents.length === 1 ? '' : 'ies'} matching your filters.`];
+
+    if (allEvents.length) {
+      metaBits.push(`${campusCount} campus`);
+      metaBits.push(`${externalCount} external`);
+    }
+
+    if ((currentSource === 'All' || currentSource === 'external') && externalSyncStatus?.lastSuccessAt) {
+      metaBits.push(`Unstop synced ${formatDate(externalSyncStatus.lastSuccessAt)}`);
+    }
+
+    if (resultMeta) {
+      resultMeta.textContent = metaBits.join(' ');
+    }
+
+    if (livePulse) {
+      livePulse.textContent = `${campusCount} campus • ${externalCount} external`;
+    }
+  };
+
+  const updateEmptyStateCopy = (visibleEvents) => {
+    if (!emptyStateTitle || !emptyStateCopy) return;
+    if (visibleEvents.length) return;
+
+    if (currentSource === 'external' && !externalEvents.length) {
+      emptyStateTitle.textContent = 'No external opportunities synced yet.';
+      emptyStateCopy.textContent = externalSyncStatus?.lastSuccessAt
+        ? 'The feed is live, but there are no active external opportunities available in Firestore right now.'
+        : 'Run the Unstop importer to populate the external opportunities feed, then refresh this page.';
+      return;
+    }
+
+    emptyStateTitle.textContent = 'No opportunities matched those filters yet.';
+    emptyStateCopy.textContent = 'Try widening the filters or switch back to all opportunities.';
+  };
+
   const applyFilters = () => {
-    const filtered = filterEvents(allEvents, {
+    const filtered = filterOpportunityFeed(allEvents, {
+      source: currentSource,
       category: currentCategory,
       search: searchInput?.value.trim() || '',
       location: locationSelect?.value || 'All',
@@ -570,45 +765,96 @@ export async function initEventsPage() {
     });
     const sorted = applySort(filtered, sortSelect.value);
     renderEventCards(sorted);
-    const resultMeta = document.getElementById('eventsResultMeta');
-    const livePulse = document.getElementById('eventsLivePulse');
-    if (resultMeta) {
-      resultMeta.textContent = `${sorted.length} live opportunity${sorted.length === 1 ? '' : 'ies'} matching your filters.`;
-    }
-    if (livePulse) {
-      const teamBasedCount = sorted.filter((event) => getNormalizedTeamSize(event) > 1).length;
-      livePulse.textContent = `${teamBasedCount} team-based picks in this view`;
+    updateResultsHead(sorted);
+    updateEmptyStateCopy(sorted);
+  };
+
+  const refreshFeed = () => {
+    allEvents = [...campusEvents, ...externalEvents];
+    populateLocations();
+    renderCategoryPills();
+    applyFilters();
+
+    if (campusReady && externalReady) {
+      hideLoadingSpinner('eventsLoader', '');
     }
   };
 
   subscribeToEvents(
     (events) => {
-      allEvents = events;
-      populateLocations();
-      renderCategoryPills();
-      applyFilters();
-      hideLoadingSpinner('eventsLoader', '');
+      campusEvents = events;
+      campusReady = true;
+      refreshFeed();
     },
     async (error) => {
       console.warn('Live events fallback:', error);
-      allEvents = await getEvents();
-      populateLocations();
-      renderCategoryPills();
-      applyFilters();
-      hideLoadingSpinner('eventsLoader', '');
+      campusEvents = await getEvents();
+      campusReady = true;
+      refreshFeed();
     }
   );
 
-  searchInput?.addEventListener('keyup', applyFilters);
+  subscribeToExternalEvents(
+    (events) => {
+      externalEvents = events;
+      externalReady = true;
+      refreshFeed();
+    },
+    (error) => {
+      console.warn('External opportunities skipped:', error);
+      externalEvents = [];
+      externalReady = true;
+      refreshFeed();
+    }
+  );
+
+  subscribeToExternalSyncStatus(
+    (status) => {
+      externalSyncStatus = status;
+      if (campusReady && externalReady) {
+        applyFilters();
+      }
+    },
+    (error) => {
+      console.warn('External sync status skipped:', error);
+    }
+  );
+
+  sourceButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      sourceButtons.forEach((item) => item.classList.remove('active'));
+      button.classList.add('active');
+      currentSource = button.dataset.source || 'All';
+      populateLocations();
+      renderCategoryPills();
+      applyFilters();
+    });
+  });
+
+  searchInput?.addEventListener('input', applyFilters);
   sortSelect?.addEventListener('change', applyFilters);
   locationSelect?.addEventListener('change', applyFilters);
   formatSelect?.addEventListener('change', applyFilters);
   teamSelect?.addEventListener('change', applyFilters);
 }
 
-function populateDetailCountdown(dateValue) {
+function populateDetailCountdown(dateValue, label = 'Event starts in') {
+  const countdownWrap = document.getElementById('detailCountdownWrap');
   const countdownPanel = document.getElementById('detailCountdown');
+  const countdownLabel = document.getElementById('detailCountdownLabel');
+
+  if (!countdownWrap || !countdownPanel || !countdownLabel) {
+    return;
+  }
+
+  if (!dateValue) {
+    countdownWrap.classList.add('d-none');
+    return;
+  }
+
   const countdown = getCountdown(dateValue);
+  countdownWrap.classList.remove('d-none');
+  countdownLabel.textContent = label;
   document.getElementById('countdownDays').textContent = String(countdown.days).padStart(2, '0');
   document.getElementById('countdownHours').textContent = String(countdown.hours).padStart(2, '0');
   document.getElementById('countdownMinutes').textContent = String(countdown.minutes).padStart(2, '0');
@@ -645,8 +891,9 @@ function renderTeamMemberFields(container, count) {
 
 export async function initEventDetailPage() {
   const eventId = getQueryParam('id');
+  const requestedType = getQueryParam('type');
   const modalElement = document.getElementById('registrationModal');
-  const registrationModal = new bootstrap.Modal(modalElement);
+  const registrationModal = modalElement ? new bootstrap.Modal(modalElement) : null;
   const registerButton = document.getElementById('registerButton');
   const waitlistButton = document.getElementById('waitlistButton');
   const registrationForm = document.getElementById('registrationForm');
@@ -662,111 +909,333 @@ export async function initEventDetailPage() {
   const teamNameInput = document.getElementById('teamName');
   const teamMemberCount = document.getElementById('teamMemberCount');
   const teamMembersFields = document.getElementById('teamMembersFields');
-  let event = await getEventById(eventId);
-  let liveRegisteredCount = event.registeredCount || 0;
+  const detailSourceTypeBadge = document.getElementById('detailSourceTypeBadge');
+  const detailSourcePlatformPill = document.getElementById('detailSourcePlatformPill');
+  const detailContextNote = document.getElementById('detailContextNote');
+  const detailLongDescriptionSection = document.getElementById('detailLongDescriptionSection');
+  const detailLongDescriptionHeading = document.getElementById('detailLongDescriptionHeading');
+  const detailLongDescription = document.getElementById('detailLongDescription');
+  const detailCampusStatsWrap = document.getElementById('detailCampusStatsWrap');
+  const detailExternalStatsWrap = document.getElementById('detailExternalStatsWrap');
+  const registrationActionWrap = document.getElementById('registrationActionWrap');
+  const fullStateWrap = document.getElementById('fullStateWrap');
+  const externalActionWrap = document.getElementById('externalActionWrap');
+  const externalPrimaryButton = document.getElementById('externalPrimaryButton');
+  const externalActionNote = document.getElementById('externalActionNote');
+  const detailExternalTypeBadge = document.getElementById('detailExternalTypeBadge');
+  const detailSourceBadge = document.getElementById('detailSourceBadge');
+  const detailExternalMetaCopy = document.getElementById('detailExternalMetaCopy');
+  const detailSourcePlatform = document.getElementById('detailSourcePlatform');
+  const detailSourceInlineLink = document.getElementById('detailSourceInlineLink');
+  const detailFaqsSectionTitle = document.querySelector('#sectionFaqsWrapper h3');
+  const detailTimelineSectionTitle = document.querySelector('#sectionTimelineWrapper h3');
+  const detailPrizesSectionTitle = document.querySelector('#sectionPrizesWrapper h3');
+  const resolveEvent = async () => {
+    if (requestedType === 'external') {
+      return (await getExternalEventById(eventId))
+        || (await getCampusEventById(eventId, { fallback: false }));
+    }
+
+    return (await getCampusEventById(eventId, { fallback: false }))
+      || (await getExternalEventById(eventId))
+      || (eventId ? null : normalizeEvent(fallbackEvents[0]));
+  };
+  let event = await resolveEvent();
+  let liveRegisteredCount = event?.registeredCount || 0;
 
   showLoadingSpinner('eventDetailLoader', 'Loading event details…');
 
-  const renderEvent = async () => {
-    document.getElementById('detailPoster').src = event.posterUrl || 'assets/images/hero.png';
-    document.getElementById('detailCategory').textContent = event.category;
-    document.getElementById('detailTitle').textContent = event.title;
-    document.getElementById('detailDescription').textContent = event.description;
-    document.getElementById('detailDate').textContent = formatShortDate(event.date);
-    document.getElementById('detailTime').textContent = formatTimeValue(getEventDateValue(event));
-    document.getElementById('detailVenue').textContent = event.venue;
-    document.getElementById('detailCategoryText').textContent = event.category;
-    document.getElementById('detailDeadline').textContent = event.regDeadline ? formatDate(event.regDeadline) : 'Until the event begins';
-    document.getElementById('detailFormat').textContent = getNormalizedFormat(event);
-    document.getElementById('detailLocation').textContent = getNormalizedLocation(event);
-    document.getElementById('detailParticipation').textContent = getParticipationLabel(event);
-    document.getElementById('organizerName').textContent = event.organizerName || 'Campus Organizer';
-    document.getElementById('organizerAvatar').textContent = getInitials(event.organizerName || 'Campus Organizer');
-    document.getElementById('registrationModalTitle').textContent = `Register for ${event.title}`;
-    populateDetailCountdown(getEventDateValue(event));
+  const renderUnavailableState = () => {
+    document.getElementById('detailTitle').textContent = 'Opportunity unavailable';
+    document.getElementById('detailDescription').textContent = 'This listing may have expired or has not been synced into EventDesk yet.';
+    document.getElementById('detailPoster').src = 'assets/images/hero.png';
+    document.getElementById('detailCategory').textContent = 'Unavailable';
+    document.getElementById('detailCategoryText').textContent = 'Unavailable';
+    document.getElementById('detailDynamicMeta').classList.add('d-none');
+    document.getElementById('detailExtendedSections').classList.add('d-none');
+    detailLongDescriptionSection.classList.add('d-none');
+    toggleElementVisibility(detailSourceTypeBadge, false);
+    toggleElementVisibility(detailSourcePlatformPill, false);
+    toggleElementVisibility(detailContextNote, false);
+    toggleElementVisibility(detailCampusStatsWrap, false);
+    toggleElementVisibility(detailExternalStatsWrap, false);
+    toggleElementVisibility(registrationActionWrap, false);
+    toggleElementVisibility(fullStateWrap, false);
+    toggleElementVisibility(externalActionWrap, false);
+    populateDetailCountdown(null);
+    hideLoadingSpinner('eventDetailLoader', '');
+  };
 
-    const dynamicMetaContent = [];
-    if (event.teamSize) dynamicMetaContent.push(buildDetailChip('Team', getParticipationLabel(event)));
-    if (event.regDeadline) dynamicMetaContent.push(buildDetailChip('Deadline', formatShortDate(event.regDeadline)));
-    if (event.tracks && event.tracks.length) {
-      event.tracks.forEach(track => dynamicMetaContent.push(buildDetailChip('Track', track)));
-    }
-    if (event.eligibility && event.eligibility.length) {
-      event.eligibility.forEach(elig => dynamicMetaContent.push(buildDetailChip('Eligibility', elig)));
-    }
-    
+  if (!event) {
+    renderUnavailableState();
+    return;
+  }
+
+  const renderEvent = () => {
+    const isExternal = isExternalOpportunity(event);
+    const sourceLabel = isExternal ? getOpportunitySourceLabel(event.source) : 'Campus';
+    const summaryText = isExternal
+      ? (event.summary || event.description || 'Open the original source listing for complete application details.')
+      : event.description;
+    const primaryDate = isExternal ? getOpportunityPrimaryDateValue(event) : getEventDateValue(event);
+    const countdownContext = isExternal ? getOpportunityCountdownContext(event) : { kind: 'start', label: 'Starts' };
+    const deadlineDate = isExternal ? getOpportunityDeadlineValue(event) : (event.regDeadline ? getEventDateValue({ date: event.regDeadline }) : null);
     const metaContainer = document.getElementById('detailDynamicMeta');
-    if (dynamicMetaContent.length) {
-      metaContainer.innerHTML = dynamicMetaContent.join('');
-      metaContainer.classList.remove('d-none');
-    } else {
-      metaContainer.classList.add('d-none');
-    }
-    
-    let hasExtended = false;
     const timelineEl = document.getElementById('detailTimeline');
     const prizesEl = document.getElementById('detailPrizes');
     const faqsEl = document.getElementById('detailFaqs');
-    
-    if (event.timeline) {
-      timelineEl.textContent = event.timeline;
-      document.getElementById('sectionTimelineWrapper').classList.remove('d-none');
-      hasExtended = true;
-    } else {
-      document.getElementById('sectionTimelineWrapper').classList.add('d-none');
-    }
-    
-    if (event.prizes) {
-      prizesEl.textContent = event.prizes;
-      document.getElementById('sectionPrizesWrapper').classList.remove('d-none');
-      hasExtended = true;
-    } else {
-      document.getElementById('sectionPrizesWrapper').classList.add('d-none');
-    }
-    
-    if (event.faqs) {
-      faqsEl.textContent = event.faqs;
-      document.getElementById('sectionFaqsWrapper').classList.remove('d-none');
-      hasExtended = true;
-    } else {
-      document.getElementById('sectionFaqsWrapper').classList.add('d-none');
-    }
-    
-    if (hasExtended) {
-      document.getElementById('detailExtendedSections').classList.remove('d-none');
-    } else {
-      document.getElementById('detailExtendedSections').classList.add('d-none');
-    }
+    const timelineSection = document.getElementById('sectionTimelineWrapper');
+    const prizesSection = document.getElementById('sectionPrizesWrapper');
+    const faqsSection = document.getElementById('sectionFaqsWrapper');
+    const extendedSections = document.getElementById('detailExtendedSections');
 
-    const teamLimit = getNormalizedTeamSize(event);
-    if (teamFields && teamMemberCount && teamMembersFields) {
-      if (teamLimit > 1) {
-        teamFields.classList.remove('d-none');
-        teamHint.textContent = `This ${event.category.toLowerCase()} supports team participation with up to ${teamLimit} members.`;
-        teamBadge.textContent = `Up to ${teamLimit}`;
-        teamMemberCount.innerHTML = Array.from({ length: teamLimit }, (_, index) => {
-          const value = index + 1;
-          return `<option value="${value}">${value} participant${value === 1 ? '' : 's'}</option>`;
-        }).join('');
-        if (!teamMemberCount.value || Number(teamMemberCount.value) > teamLimit) {
-          teamMemberCount.value = String(teamLimit);
-        }
-        renderTeamMemberFields(teamMembersFields, Number(teamMemberCount.value));
+    document.getElementById('detailPoster').src = event.posterUrl || 'assets/images/hero.png';
+    document.getElementById('detailCategory').textContent = event.category || (isExternal ? 'External Opportunity' : 'Campus Event');
+    document.getElementById('detailTitle').textContent = event.title;
+    document.getElementById('detailDescription').textContent = summaryText;
+    document.getElementById('detailCategoryText').textContent = event.category || (isExternal ? 'Opportunity' : 'Event');
+    document.getElementById('organizerName').textContent = event.organizerName || (isExternal ? sourceLabel : 'Campus Organizer');
+    document.getElementById('organizerAvatar').textContent = getInitials(event.organizerName || sourceLabel || 'EventDesk');
+
+    if (isExternal) {
+      const longDescription = event.description && event.description !== summaryText ? event.description : '';
+      const dynamicMetaContent = [];
+
+      document.getElementById('organizerLabel').textContent = 'Listed by';
+      document.getElementById('detailDateLabel').textContent = countdownContext.kind === 'deadline'
+        ? 'Deadline'
+        : countdownContext.kind === 'synced'
+          ? 'Last Synced'
+          : 'Start Date';
+      document.getElementById('detailTimeLabel').textContent = countdownContext.kind === 'deadline'
+        ? 'Time'
+        : countdownContext.kind === 'synced'
+          ? 'Updated'
+          : 'Start Time';
+      document.getElementById('detailVenueLabel').textContent = 'Organizer';
+      document.getElementById('detailTypeLabel').textContent = 'Opportunity';
+      document.getElementById('detailDate').textContent = primaryDate ? formatShortDate(primaryDate) : 'See source';
+      document.getElementById('detailTime').textContent = primaryDate ? formatTimeValue(primaryDate) : 'See source';
+      document.getElementById('detailVenue').textContent = event.organizerName || sourceLabel;
+      document.getElementById('detailDeadline').textContent = deadlineDate ? formatDate(deadlineDate) : 'See source';
+      document.getElementById('detailFormat').textContent = getOpportunityModeValue(event) || 'See source';
+      document.getElementById('detailLocation').textContent = getOpportunityLocationValue(event) || 'See source';
+      document.getElementById('detailParticipation').textContent = getOpportunityParticipationValue(event) || 'See source';
+
+      detailSourceTypeBadge.textContent = 'External Opportunity';
+      toggleElementVisibility(detailSourceTypeBadge, true);
+      detailSourcePlatformPill.textContent = sourceLabel;
+      toggleElementVisibility(detailSourcePlatformPill, true);
+      detailContextNote.textContent = `Applications happen on ${sourceLabel}. EventDesk is surfacing this as a discovered opportunity.`;
+      toggleElementVisibility(detailContextNote, true);
+
+      if (event.teamSizeText) dynamicMetaContent.push(buildDetailChip('Team', event.teamSizeText));
+      if (event.registrationDeadline) dynamicMetaContent.push(buildDetailChip('Deadline', formatShortDate(event.registrationDeadline)));
+      if (event.eligibilityText) dynamicMetaContent.push(buildDetailChip('Eligibility', event.eligibilityText));
+      if (Array.isArray(event.tags) && event.tags.length) {
+        event.tags.slice(0, 3).forEach((tag) => dynamicMetaContent.push(buildDetailChip('Tag', tag)));
+      }
+
+      if (dynamicMetaContent.length) {
+        metaContainer.innerHTML = dynamicMetaContent.join('');
+        metaContainer.classList.remove('d-none');
       } else {
+        metaContainer.classList.add('d-none');
+      }
+
+      if (longDescription) {
+        detailLongDescriptionHeading.textContent = 'About this opportunity';
+        detailLongDescription.textContent = longDescription;
+        detailLongDescriptionSection.classList.remove('d-none');
+      } else {
+        detailLongDescriptionSection.classList.add('d-none');
+      }
+
+      if (detailTimelineSectionTitle) detailTimelineSectionTitle.textContent = 'Source Notes';
+      if (detailPrizesSectionTitle) detailPrizesSectionTitle.textContent = 'Rewards & Prizes';
+      if (detailFaqsSectionTitle) detailFaqsSectionTitle.textContent = 'Eligibility';
+
+      if (event.summary && event.summary !== summaryText) {
+        timelineEl.textContent = event.summary;
+        timelineSection.classList.remove('d-none');
+      } else {
+        timelineSection.classList.add('d-none');
+      }
+
+      if (event.prizesText) {
+        prizesEl.textContent = event.prizesText;
+        prizesSection.classList.remove('d-none');
+      } else {
+        prizesSection.classList.add('d-none');
+      }
+
+      if (event.eligibilityText) {
+        faqsEl.textContent = event.eligibilityText;
+        faqsSection.classList.remove('d-none');
+      } else {
+        faqsSection.classList.add('d-none');
+      }
+
+      extendedSections.classList.toggle(
+        'd-none',
+        timelineSection.classList.contains('d-none')
+          && prizesSection.classList.contains('d-none')
+          && faqsSection.classList.contains('d-none')
+      );
+
+      toggleElementVisibility(detailCampusStatsWrap, false);
+      toggleElementVisibility(detailExternalStatsWrap, true);
+      toggleElementVisibility(registrationActionWrap, false);
+      toggleElementVisibility(fullStateWrap, false);
+      toggleElementVisibility(externalActionWrap, true);
+
+      if (detailExternalTypeBadge) {
+        detailExternalTypeBadge.textContent = 'External Opportunity';
+      }
+      if (detailSourceBadge) {
+        detailSourceBadge.textContent = sourceLabel;
+      }
+      if (detailSourcePlatform) {
+        detailSourcePlatform.textContent = sourceLabel;
+      }
+      if (detailExternalMetaCopy) {
+        detailExternalMetaCopy.textContent = `Applications happen on ${sourceLabel}. EventDesk is surfacing this as a discovered opportunity.`;
+      }
+      if (detailSourceInlineLink) {
+        detailSourceInlineLink.href = event.sourceUrl || '#';
+        toggleElementVisibility(detailSourceInlineLink, Boolean(event.sourceUrl));
+      }
+      if (externalPrimaryButton) {
+        externalPrimaryButton.href = event.sourceUrl || '#';
+        externalPrimaryButton.textContent = `View on ${sourceLabel}`;
+      }
+      if (externalActionNote) {
+        externalActionNote.textContent = `Registration or application happens on ${sourceLabel}.`;
+      }
+
+      if (teamFields && teamMemberCount && teamMembersFields) {
         teamFields.classList.add('d-none');
         teamMemberCount.innerHTML = '<option value="1">1 participant</option>';
         teamMemberCount.value = '1';
-        teamNameInput.value = '';
         teamMembersFields.innerHTML = '';
+        teamNameInput.value = '';
       }
+    } else {
+      const dynamicMetaContent = [];
+      const teamLimit = getNormalizedTeamSize(event);
+      let hasExtended = false;
+
+      document.getElementById('organizerLabel').textContent = 'Organized by';
+      document.getElementById('detailDateLabel').textContent = 'Date';
+      document.getElementById('detailTimeLabel').textContent = 'Time';
+      document.getElementById('detailVenueLabel').textContent = 'Venue';
+      document.getElementById('detailTypeLabel').textContent = 'Type';
+      document.getElementById('detailDate').textContent = formatShortDate(event.date);
+      document.getElementById('detailTime').textContent = formatTimeValue(getEventDateValue(event));
+      document.getElementById('detailVenue').textContent = event.venue;
+      document.getElementById('detailDeadline').textContent = event.regDeadline ? formatDate(event.regDeadline) : 'Until the event begins';
+      document.getElementById('detailFormat').textContent = getNormalizedFormat(event);
+      document.getElementById('detailLocation').textContent = getNormalizedLocation(event);
+      document.getElementById('detailParticipation').textContent = getParticipationLabel(event);
+
+      toggleElementVisibility(detailSourceTypeBadge, false);
+      toggleElementVisibility(detailSourcePlatformPill, false);
+      toggleElementVisibility(detailContextNote, false);
+      toggleElementVisibility(detailCampusStatsWrap, true);
+      toggleElementVisibility(detailExternalStatsWrap, false);
+      toggleElementVisibility(externalActionWrap, false);
+      detailLongDescriptionSection.classList.add('d-none');
+
+      if (event.teamSize) dynamicMetaContent.push(buildDetailChip('Team', getParticipationLabel(event)));
+      if (event.regDeadline) dynamicMetaContent.push(buildDetailChip('Deadline', formatShortDate(event.regDeadline)));
+      if (event.tracks && event.tracks.length) {
+        event.tracks.forEach((track) => dynamicMetaContent.push(buildDetailChip('Track', track)));
+      }
+      if (event.eligibility && event.eligibility.length) {
+        event.eligibility.forEach((eligibility) => dynamicMetaContent.push(buildDetailChip('Eligibility', eligibility)));
+      }
+
+      if (dynamicMetaContent.length) {
+        metaContainer.innerHTML = dynamicMetaContent.join('');
+        metaContainer.classList.remove('d-none');
+      } else {
+        metaContainer.classList.add('d-none');
+      }
+
+      if (detailTimelineSectionTitle) detailTimelineSectionTitle.textContent = 'Stages & Timeline';
+      if (detailPrizesSectionTitle) detailPrizesSectionTitle.textContent = 'Rewards & Prizes';
+      if (detailFaqsSectionTitle) detailFaqsSectionTitle.textContent = 'Frequently Asked Questions';
+
+      if (event.timeline) {
+        timelineEl.textContent = event.timeline;
+        timelineSection.classList.remove('d-none');
+        hasExtended = true;
+      } else {
+        timelineSection.classList.add('d-none');
+      }
+
+      if (event.prizes) {
+        prizesEl.textContent = event.prizes;
+        prizesSection.classList.remove('d-none');
+        hasExtended = true;
+      } else {
+        prizesSection.classList.add('d-none');
+      }
+
+      if (event.faqs) {
+        faqsEl.textContent = event.faqs;
+        faqsSection.classList.remove('d-none');
+        hasExtended = true;
+      } else {
+        faqsSection.classList.add('d-none');
+      }
+
+      extendedSections.classList.toggle('d-none', !hasExtended);
+
+      if (teamFields && teamMemberCount && teamMembersFields) {
+        if (teamLimit > 1) {
+          teamFields.classList.remove('d-none');
+          teamHint.textContent = `This ${event.category.toLowerCase()} supports team participation with up to ${teamLimit} members.`;
+          teamBadge.textContent = `Up to ${teamLimit}`;
+          teamMemberCount.innerHTML = Array.from({ length: teamLimit }, (_, index) => {
+            const value = index + 1;
+            return `<option value="${value}">${value} participant${value === 1 ? '' : 's'}</option>`;
+          }).join('');
+          if (!teamMemberCount.value || Number(teamMemberCount.value) > teamLimit) {
+            teamMemberCount.value = String(teamLimit);
+          }
+          renderTeamMemberFields(teamMembersFields, Number(teamMemberCount.value));
+        } else {
+          teamFields.classList.add('d-none');
+          teamMemberCount.innerHTML = '<option value="1">1 participant</option>';
+          teamMemberCount.value = '1';
+          teamNameInput.value = '';
+          teamMembersFields.innerHTML = '';
+        }
+      }
+
+      document.getElementById('registrationModalTitle').textContent = `Register for ${event.title}`;
     }
 
     clearInterval(detailCountdownTimer);
-    detailCountdownTimer = window.setInterval(() => populateDetailCountdown(getEventDateValue(event)), 1000);
+    if (primaryDate && countdownContext.kind !== 'synced') {
+      populateDetailCountdown(primaryDate, isExternal ? `${countdownContext.label} in` : 'Event starts in');
+      detailCountdownTimer = window.setInterval(
+        () => populateDetailCountdown(primaryDate, isExternal ? `${countdownContext.label} in` : 'Event starts in'),
+        1000
+      );
+    } else {
+      populateDetailCountdown(null);
+    }
+
     hideLoadingSpinner('eventDetailLoader', '');
   };
 
   const syncSeatPanel = (registeredCount) => {
+    if (isExternalOpportunity(event)) {
+      return;
+    }
+
     const seatStatus = updateSeatUI(registeredCount, event.seatCap);
     document.getElementById('registeredCount').textContent = registeredCount;
     document.getElementById('seatCap').textContent = event.seatCap;
@@ -782,24 +1251,31 @@ export async function initEventDetailPage() {
         : 'badge badge-category';
 
     const isFull = registeredCount >= event.seatCap;
-    document.getElementById('registrationActionWrap').classList.toggle('d-none', isFull);
-    document.getElementById('fullStateWrap').classList.toggle('d-none', !isFull);
+    registrationActionWrap.classList.toggle('d-none', isFull);
+    fullStateWrap.classList.toggle('d-none', !isFull);
   };
 
-  await renderEvent();
+  renderEvent();
   syncSeatPanel(liveRegisteredCount);
 
-  if (eventId) {
+  if (eventId && !isExternalOpportunity(event)) {
     onSnapshot(doc(db, 'events', eventId), async (snapshot) => {
       if (!snapshot.exists()) return;
       event = normalizeEvent({ id: snapshot.id, ...snapshot.data() });
       liveRegisteredCount = event.registeredCount ?? liveRegisteredCount;
-      await renderEvent();
+      renderEvent();
       syncSeatPanel(liveRegisteredCount);
     });
   }
 
   const openRegistrationFlow = async () => {
+    if (isExternalOpportunity(event)) {
+      if (event.sourceUrl) {
+        window.open(event.sourceUrl, '_blank', 'noopener,noreferrer');
+      }
+      return;
+    }
+
     if (!auth.currentUser) {
       window.location.href = 'login.html';
       return;
@@ -822,7 +1298,7 @@ export async function initEventDetailPage() {
       }
       renderTeamMemberFields(teamMembersFields, Number(teamMemberCount.value));
     }
-    registrationModal.show();
+    registrationModal?.show();
   };
 
   registerButton?.addEventListener('click', openRegistrationFlow);
@@ -843,6 +1319,10 @@ export async function initEventDetailPage() {
 
   registrationForm?.addEventListener('submit', async (submitEvent) => {
     submitEvent.preventDefault();
+    if (isExternalOpportunity(event)) {
+      return;
+    }
+
     const phone = phoneInput.value.trim();
     if (!validatePhone(phone)) {
       phoneInput.classList.add('is-invalid');
@@ -909,6 +1389,10 @@ export async function initEventDetailPage() {
   });
 
   modalElement?.addEventListener('hidden.bs.modal', () => {
+    if (isExternalOpportunity(event)) {
+      return;
+    }
+
     formState.classList.remove('d-none');
     successState.classList.add('d-none');
     registrationForm.reset();

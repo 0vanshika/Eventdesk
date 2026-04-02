@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bg" x1="14" y1="10" x2="50" y2="54" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22314f"/>
+      <stop offset="1" stop-color="#111111"/>
+    </linearGradient>
+    <linearGradient id="ticket" x1="20" y1="18" x2="44" y2="46" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fffdf7"/>
+      <stop offset="1" stop-color="#f8efe0"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="18" fill="url(#bg)"/>
+  <circle cx="18" cy="15" r="14" fill="#ffd166" opacity=".15"/>
+  <circle cx="49" cy="49" r="12" fill="#ff8db3" opacity=".12"/>
+  <path d="M21 17h22c3.3 0 6 2.7 6 6v4.2c-2.3.4-4 2.4-4 4.8s1.7 4.4 4 4.8V41c0 3.3-2.7 6-6 6H21c-3.3 0-6-2.7-6-6v-4.2c2.3-.4 4-2.4 4-4.8s-1.7-4.4-4-4.8V23c0-3.3 2.7-6 6-6Z" fill="url(#ticket)"/>
+  <path d="M21 17h22c3.3 0 6 2.7 6 6v4.2c-2.3.4-4 2.4-4 4.8s1.7 4.4 4 4.8V41c0 3.3-2.7 6-6 6H21c-3.3 0-6-2.7-6-6v-4.2c2.3-.4 4-2.4 4-4.8s-1.7-4.4-4-4.8V23c0-3.3 2.7-6 6-6Z" fill="none" stroke="#e7dac5" stroke-width="1.2"/>
+  <rect x="23.5" y="22.5" width="5.2" height="19" rx="2.3" fill="#18233b"/>
+  <rect x="23.5" y="22.5" width="16.8" height="4.8" rx="2.3" fill="#18233b"/>
+  <rect x="23.5" y="29.7" width="12.4" height="4.8" rx="2.3" fill="#18233b"/>
+  <rect x="23.5" y="36.7" width="16.8" height="4.8" rx="2.3" fill="#18233b"/>
+  <circle cx="41.5" cy="24.8" r="2.3" fill="#f6c453"/>
+</svg>
